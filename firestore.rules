@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
+    function hasRole(role) { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role; }
+    match /users/{id} {
+      allow create: if signedIn() && id == request.auth.uid && request.resource.data.uid == id && request.resource.data.role in ['buyer','supplier'];
+      allow read: if signedIn() && (id == request.auth.uid || isAdmin());
+      allow update: if signedIn() && ((id == request.auth.uid && request.resource.data.role == resource.data.role && request.resource.data.uid == resource.data.uid) || isAdmin());
+    }
+    match /products/{id} {
+      allow read: if true;
+      allow create: if hasRole('supplier') && request.resource.data.ownerId == request.auth.uid && request.resource.data.get('verified', false) == false;
+      allow update: if (hasRole('supplier') && resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == resource.data.ownerId && request.resource.data.get('verified',false) == resource.data.get('verified',false)) || isAdmin();
+      allow delete: if (hasRole('supplier') && resource.data.ownerId == request.auth.uid) || isAdmin();
+    }
+    match /rfqs/{id} {
+      allow create: if hasRole('buyer') && request.resource.data.buyerId == request.auth.uid && request.resource.data.status == 'Baru';
+      allow read: if signedIn() && (isAdmin() || resource.data.buyerId == request.auth.uid || resource.data.supplierId == request.auth.uid);
+      allow update: if isAdmin() || (hasRole('buyer') && resource.data.buyerId == request.auth.uid && resource.data.status == 'Dibalas' && request.resource.data.status == 'Selesai' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']) && existsAfter(/databases/$(database)/documents/orders/$(('rfq_' + id)))) || (hasRole('supplier') && resource.data.supplierId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','quotePrice','quoteTerms','quotedAt','updatedAt']) && request.resource.data.status in ['Dibaca','Dibalas']);
+    }
+    match /orders/{id} {
+      allow create: if hasRole('buyer') && request.resource.data.buyerId == request.auth.uid && request.resource.data.status == 'Menunggu supplier' && ((id == 'rfq_' + request.resource.data.rfqId && get(/databases/$(database)/documents/rfqs/$(request.resource.data.rfqId)).data.buyerId == request.auth.uid) || (id.matches('cart_.*') && request.resource.data.checkoutGroupId is string && getAfter(/databases/$(database)/documents/checkoutGroups/$(request.resource.data.checkoutGroupId)).data.buyerId == request.auth.uid));
+      allow read: if signedIn() && (isAdmin() || resource.data.buyerId == request.auth.uid || resource.data.supplierId == request.auth.uid);
+      allow update: if isAdmin() || (hasRole('buyer') && resource.data.buyerId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paymentStatus','updatedAt']) && resource.data.get('paymentStatus','Belum dibayar') == 'Belum dibayar' && request.resource.data.paymentStatus == 'Menunggu konfirmasi');
+    }
+    match /checkoutGroups/{id} { allow create: if hasRole('buyer') && request.resource.data.buyerId == request.auth.uid; allow read: if signedIn() && (isAdmin() || resource.data.buyerId == request.auth.uid); }
+    match /carts/{uid}/items/{id} { allow read, write: if hasRole('buyer') && uid == request.auth.uid; }
+    match /wishlists/{uid}/items/{id} { allow read, write: if signedIn() && uid == request.auth.uid; }
+    match /conversations/{id} {
+      allow create: if hasRole('buyer') && request.resource.data.buyerId == request.auth.uid;
+      allow read: if signedIn() && (isAdmin() || resource.data.buyerId == request.auth.uid || resource.data.supplierId == request.auth.uid);
+      allow update: if signedIn() && (isAdmin() || resource.data.buyerId == request.auth.uid || resource.data.supplierId == request.auth.uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage','lastSenderId','buyerUnread','supplierUnread','updatedAt']);
+      match /messages/{mid} {
+        allow read: if signedIn() && (isAdmin() || get(/databases/$(database)/documents/conversations/$(id)).data.buyerId == request.auth.uid || get(/databases/$(database)/documents/conversations/$(id)).data.supplierId == request.auth.uid);
+        allow create: if signedIn() && request.resource.data.senderId == request.auth.uid && (get(/databases/$(database)/documents/conversations/$(id)).data.buyerId == request.auth.uid || get(/databases/$(database)/documents/conversations/$(id)).data.supplierId == request.auth.uid);
+      }
+    }
+  }
+}
